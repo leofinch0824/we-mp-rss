@@ -206,32 +206,35 @@ class PlaywrightController:
             # 注入失败不中断流程，仅记录警告
             print_warning(f"反检测脚本注入失败: {str(e)}")
             
-    async def open_url(self, url: str, 
+    async def open_url(self, url: str,
                        wait_until: str = "domcontentloaded",
                        timeout: int = 30000) -> bool:
         """
         打开URL(异步)
-        
+
         Args:
             url: 目标URL
             wait_until: 等待策略
             timeout: 超时时间(毫秒)
-            
+
         Returns:
             是否成功
         """
-        if self._page is None:
+        # 检查 Page 对象是否有效，如果无效则重新启动浏览器
+        if not self.is_page_valid():
+            if self.debug:
+                print_warning("Page 对象无效，重新启动浏览器...")
             await self.start_browser()
-            
+
         start_time = time.time()
-        
+
         try:
             # 导航到URL
             await self._page.goto(url, wait_until=wait_until, timeout=timeout)
-            
+
             # 智能等待
             await self._smart_wait()
-            
+
             # 记录指标
             load_time = time.time() - start_time
             self.metrics.total_operations += 1
@@ -239,15 +242,20 @@ class PlaywrightController:
                 (self.metrics.avg_operation_time * (self.metrics.total_operations - 1) + load_time)
                 / self.metrics.total_operations
             )
-            
+
             if self.debug:
                 print_info(f"页面加载成功: {url}, 耗时: {load_time:.2f}s")
-                
+
             return True
-            
+
         except Exception as e:
             self.metrics.failed_operations += 1
             print_error(f"打开URL失败: {url}, 错误: {str(e)}")
+            # 如果打开URL失败，尝试清理并重新初始化
+            try:
+                await self.close()
+            except Exception:
+                pass
             return False
             
     async def _smart_wait(self) -> None:
@@ -376,6 +384,20 @@ class PlaywrightController:
     def is_browser_started(self) -> bool:
         """检查浏览器是否已启动"""
         return self._browser is not None and self._page is not None
+
+    def is_page_valid(self) -> bool:
+        """
+        检查 Page 对象是否有效
+        通过尝试访问 Page 的内部连接来判断对象是否仍然可用
+        """
+        if self._page is None:
+            return False
+        try:
+            # 尝试访问 Page 对象的内部属性，如果对象已失效会抛出异常
+            # 这是一个轻量级的检查，不会实际执行任何浏览器操作
+            return hasattr(self._page, '_impl_obj') and self._page._impl_obj is not None
+        except Exception:
+            return False
 
     async def get_cookies(self) -> List[Dict]:
         """获取所有 cookies（异步）"""

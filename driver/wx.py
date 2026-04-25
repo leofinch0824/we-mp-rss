@@ -145,14 +145,26 @@ class Wx:
                 await asyncio.sleep(60)
                 return False
             await asyncio.sleep(1)
-            if not hasattr(self, 'controller') or not self.controller.page:
-                print_error("浏览器未启动，无法切换账号")
+
+            # 检查 controller 和 Page 对象是否有效
+            if not hasattr(self, 'controller') or self.controller is None:
+                print_error("Controller 未初始化，无法切换账号")
+                return False
+
+            if not self.controller.is_page_valid():
+                print_error("Page 对象无效，无法切换账号")
                 return False
 
             page = self.controller.page
+            if page is None:
+                print_error("Page 对象为 None，无法切换账号")
+                return False
 
-            # 等待页面加载完成
-            await page.wait_for_load_state("networkidle")
+            # 等待页面加载完成，添加异常处理
+            try:
+                await page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception as e:
+                print_warning(f"等待页面加载状态失败: {str(e)}，继续尝试切换账号...")
 
             # 点击账号信息区域打开账号面板
             account_info = page.locator(".weui-desktop-account__info")
@@ -189,8 +201,11 @@ class Wx:
                                 account_name = await nick_name.text_content()
                                 print(f"账号: {account_name} ID:{account_id}")
                                 await p.click()
-                                # 等待页面加载并验证切换成功
-                                await page.wait_for_load_state("networkidle", timeout=10000)
+                                # 等待页面加载并验证切换成功，添加异常处理
+                                try:
+                                    await page.wait_for_load_state("networkidle", timeout=10000)
+                                except Exception as e:
+                                    print_warning(f"等待页面加载状态失败: {str(e)}，继续验证切换结果...")
                                 await asyncio.sleep(2)
                                 session_data = await self.Call_Success(has_extdata=False)
 
@@ -233,13 +248,13 @@ class Wx:
 
         except Exception as e:
             print_error(f"切换账号时发生错误: {str(e)}")
-            # 切换失败时清理资源
-            self.cleanup_resources()
-            await self.Close()
             return False
         finally:
             # 恢复任务队列
             try:
+                  # 切换失败时清理资源
+                self.cleanup_resources()
+                await self.Close()
                 from core.queue import TaskQueue, ContentTaskQueue
                 print_info(f"准备恢复队列: 主队列={main_queue_was_running}, 内容队列={content_queue_was_running}")
                 if main_queue_was_running:
@@ -356,8 +371,9 @@ class Wx:
             # 保存到临时变量，让 Call_Success 和 _extract_wechat_data 能使用
             self._temp_controller = controller
 
-            # 检查浏览器是否已启动
-            if not controller.is_browser_started():
+            # 检查浏览器是否已启动且 Page 对象有效
+            if not controller.is_browser_started() or not controller.is_page_valid():
+                print_info("浏览器未启动或 Page 对象无效，正在启动...")
                 await controller.start_browser()
 
                 cookie = Store.load()
@@ -369,8 +385,20 @@ class Wx:
                         if 'path' not in c:
                             c['path'] = '/'
                     await controller.add_cookies(cookie)
+
+            # 打开URL前再次检查 Page 对象有效性
+            if not controller.is_page_valid():
+                print_error("Page 对象仍然无效，无法继续")
+                return False
+
             await controller.open_url(f"{self.WX_HOME}?t=home/index&lang=zh_CN&token={token}")
             page = controller.page
+
+            # 验证 page 对象是否有效
+            if page is None:
+                print_error("Page 对象为 None，无法继续操作")
+                return False
+
             qrcode = page.locator("#jumpUrl")
             await qrcode.wait_for(state="visible", timeout=self.wait_time * 1000)
             await qrcode.click()
