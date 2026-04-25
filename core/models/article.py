@@ -19,7 +19,7 @@ class ArticleBase(Base):
     create_time = Column(Integer,index=True)  # 文章创建时间（Unix时间戳格式）
     publish_type = Column(Integer,index=True)  # 发布类型
     publish_src = Column(Integer,index=True)  # 发布来源
-    publish_status = Column(Text,index=True)  # 发布状态
+    publish_status = Column(String(32), index=True)  # 发布状态码
     # 状态与类型标识
     original_check_type = Column(Integer,index=True)  # 原创检测类型
     in_profile = Column(Integer,index=True)  # 是否在主页展示

@@ -15,26 +15,16 @@ from core.print import print_warning, print_info, print_error, print_success
 from core.cache import clear_cache_pattern
 from tools.fix import fix_article
 from core.article_content import sync_article_content
-from driver.wxarticle import WXArticleFetcher
+from core.refresh_task_store import refresh_task_store
 router = APIRouter(prefix=f"/articles", tags=["文章管理"])
-
-_refresh_tasks = {}
-_refresh_tasks_lock = threading.Lock()
 
 
 def _set_refresh_task(task_id: str, data: dict):
-    with _refresh_tasks_lock:
-        _refresh_tasks[task_id] = data
+    return refresh_task_store.set_task(task_id, data)
 
 
 def _get_active_refresh_task(article_id: str):
-    with _refresh_tasks_lock:
-        for task in _refresh_tasks.values():
-            if task.get("article_id") != article_id:
-                continue
-            if task.get("status") in {"pending", "running"}:
-                return dict(task)
-    return None
+    return refresh_task_store.get_active_task(article_id)
 
 
 def _run_refresh_article_task_wrapper(task_id: str, article_id: str):
@@ -44,7 +34,6 @@ def _run_refresh_article_task_wrapper(task_id: str, article_id: str):
 
 async def _run_refresh_article_task(task_id: str, article_id: str):
     session = DB.get_session()
-    fetcher = None
     try:
         _set_refresh_task(task_id, {
             "task_id": task_id,
@@ -73,38 +62,22 @@ async def _run_refresh_article_task(task_id: str, article_id: str):
             })
             return
 
-        fetcher = WXArticleFetcher()
-        fetched = await fetcher.get_article_content(target_url)
-        fetched_content = fetched.get("content")
-
-        if fetched_content != "DELETED" and not fetched_content:
-            fetch_error = fetched.get("fetch_error") or "文章内容抓取为空"
+        updated, fetch_mode = sync_article_content(
+            session=session,
+            article=article,
+            preferred_mode=cfg.get("gather.content_mode", "web"),
+            force=True,
+        )
+        if not updated:
             _set_refresh_task(task_id, {
                 "task_id": task_id,
                 "article_id": article_id,
                 "status": "failed",
-                "message": f"文章刷新失败: {fetch_error}"
+                "message": f"文章刷新失败: mode={fetch_mode}"
             })
             return
 
-        article.title = fetched.get("title") or article.title
-        article.url = target_url
-        article.publish_time = fetched.get("publish_time") or article.publish_time
-        article.content = fetched_content if fetched_content is not None else article.content
-        if fetched_content == "DELETED":
-            article.description = fetched.get("description") or article.description
-        else:
-            article.description = fetched.get("description") or article.description
-        article.pic_url = fetched.get("topic_image") or fetched.get("pic_url") or article.pic_url
-        article.status = DATA_STATUS.DELETED if fetched_content == "DELETED" else DATA_STATUS.ACTIVE
-        # 更新 has_content 字段
-        article.has_content = 1 if (article.content and article.content.strip()) else 0
-
         now_seconds = int(time.time())
-        now_millis = int(time.time() * 1000)
-        article.updated_at = now_seconds
-        article.updated_at_millis = now_millis
-        session.commit()
 
         clear_cache_pattern("articles_list")
         clear_cache_pattern("article_detail")
@@ -116,7 +89,8 @@ async def _run_refresh_article_task(task_id: str, article_id: str):
             "article_id": article_id,
             "status": "success",
             "message": "文章刷新成功",
-            "updated_at": now_seconds
+            "updated_at": now_seconds,
+            "fetch_mode": fetch_mode,
         })
     except Exception as e:
         session.rollback()
@@ -576,8 +550,7 @@ async def get_refresh_task_status(
     task_id: str,
     current_user: dict = Depends(get_current_user_or_ak)
 ):
-    with _refresh_tasks_lock:
-        task = _refresh_tasks.get(task_id)
+    task = refresh_task_store.get_task(task_id)
     if not task:
         raise HTTPException(
             status_code=fast_status.HTTP_404_NOT_FOUND,

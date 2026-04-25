@@ -231,6 +231,61 @@ class DatabaseSynchronizer:
             
         except Exception as e:
             self.logger.warning(f"迁移 {table_name}.updated_at_millis 时出错: {e}")
+
+    def _migrate_articles_publish_status_for_mysql(self):
+        """
+        迁移 articles 表：将 publish_status 从 TEXT/MEDIUMTEXT 改为可索引的 VARCHAR。
+        MySQL 不支持对 TEXT/BLOB 列直接创建普通索引而不指定前缀长度。
+        """
+        from sqlalchemy import text
+
+        if "mysql" not in self.db_url:
+            return
+
+        table_name = "articles"
+        index_name = "ix_articles_publish_status"
+
+        try:
+            inspector = inspect(self.engine)
+            if not inspector.has_table(table_name):
+                return
+
+            columns = {c["name"]: c for c in inspector.get_columns(table_name)}
+            col_info = columns.get("publish_status")
+            if not col_info:
+                return
+
+            col_type = str(col_info.get("type", "")).upper()
+            requires_type_fix = any(token in col_type for token in ("TEXT", "BLOB"))
+
+            indexes = {idx["name"] for idx in inspector.get_indexes(table_name)}
+            missing_index = index_name not in indexes
+
+            if not requires_type_fix and not missing_index:
+                self.logger.info(f"{table_name}.publish_status 已兼容 MySQL 索引，跳过迁移")
+                return
+
+            with self.engine.begin() as conn:
+                if requires_type_fix:
+                    conn.execute(
+                        text(
+                            f"ALTER TABLE {table_name} "
+                            "MODIFY COLUMN publish_status VARCHAR(32)"
+                        )
+                    )
+                    self.logger.info(f"{table_name}.publish_status 已改为 VARCHAR(32)")
+
+                if missing_index:
+                    conn.execute(
+                        text(
+                            f"CREATE INDEX {index_name} "
+                            f"ON {table_name}(publish_status)"
+                        )
+                    )
+                    self.logger.info(f"{table_name} 已补建索引 {index_name}")
+
+        except Exception as e:
+            self.logger.warning(f"迁移 {table_name}.publish_status 时出错: {e}")
     
     def sync(self):
         """同步模型到数据库"""
@@ -252,6 +307,7 @@ class DatabaseSynchronizer:
             
             # MySQL/PostgreSQL 迁移：修改 updated_at_millis 为 BIGINT
             self._migrate_articles_updated_at_millis()
+            self._migrate_articles_publish_status_for_mysql()
             
             # 处理不同数据库的特殊类型映射
             for model in self.models.values():

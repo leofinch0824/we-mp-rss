@@ -1,6 +1,6 @@
 services:
   mysql:
-    image: docker.1ms.run/mysql:8.3.0
+    image: mysql:8.3.0
     container_name: db-mp
     restart: always
     env_file:
@@ -12,7 +12,7 @@ services:
       - ./mysql-init:/docker-entrypoint-initdb.d
 
   redis:
-    image: docker.1ms.run/redis:7-alpine
+    image: redis:7-alpine
     container_name: we-mp-rss-redis
     restart: unless-stopped
     command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
@@ -42,23 +42,29 @@ services:
       - ./singbox/run-singbox.sh:/etc/sing-box/run-singbox.sh:ro
 
   we-mp-rss:
-    image: ghcr.io/rachelos/we-mp-rss:latest
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: we-mp-rss-local:latest
     container_name: we-mp-rss
     restart: unless-stopped
     env_file:
       - ../.env
     environment:
-      DB: mysql+pymysql://rss_user:pass123456@db-mp/we_mp_rss?charset=utf8mb4
-      REDIS_URL: redis://redis:6379/0
-      PROXY_HTTP_URL: http://singbox:7890
+      ENABLE_XVFB: "true"
+      HEADLESS: "false"
+      DISPLAY: :99
     ports:
       - "8001:8001"
     volumes:
       - ./data:/app/data
     depends_on:
-      - mysql
-      - redis
-      - singbox
+      mysql:
+        condition: service_started
+      redis:
+        condition: service_healthy
+      singbox:
+        condition: service_started
 
 volumes:
   db_data:

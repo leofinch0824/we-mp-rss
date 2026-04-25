@@ -2,6 +2,7 @@ __pycache__
 *.xml
 *.tmp
 config.yaml
+.env
 dist/
 build/
 static/anti_bot*
@@ -28,3 +29,6 @@ test.yaml
 .travis
 test.py
 .codeartsdoer
+.omx
+.omc
+.omx/
