@@ -80,6 +80,13 @@ if __name__ == '__main__':
         start_article_stats_refresh()
     else:
         print_warning("文章统计定时刷新任务未启用")
+
+    # 启动微信公众号登录态定时保活任务
+    if cfg.get("server.wx_token_refresh_enabled", False):  # 默认关闭
+        from jobs.mps import start_wx_token_refresh
+        start_wx_token_refresh()
+    else:
+        print_warning("微信登录保活任务未启用")
     
     print("启动服务器")
     AutoReload=cfg.get("server.auto_reload",False)

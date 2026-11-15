@@ -321,10 +321,10 @@ def start_article_stats_refresh():
     """启动文章统计定时刷新任务"""
     from core.article_lax import refresh_article_info
     from core.config import cfg
-    
+
     # 获取刷新间隔,默认5分钟
     refresh_interval = int(cfg.get("server.article_stats_refresh_interval", 3600))
-    
+
     # 添加定时任务,每隔指定时间刷新一次文章统计
     scheduler.add_cron_job(
         refresh_article_info,
@@ -333,6 +333,79 @@ def start_article_stats_refresh():
         tag="文章统计刷新"
     )
     print_success(f"文章统计定时刷新任务已启动,间隔: {refresh_interval}秒")
+
+def refresh_wx_token():
+    """微信登录态定时保活：带已存 cookie 访问公众号后台，收割续期后的 cookie/token 存回。
+
+    微信 slave_sid 是约4天的滚动窗口，带 cookie 访问后台页即可续期（实测过期时间=访问时刻+4天）。
+    会话已死（被重定向回登录页）时推送二维码通知，其余情况只记日志。
+    注意不能复用 Token()：其对已登录会话会在 #jumpUrl 定位处必然超时。
+    """
+    import asyncio
+    from driver.store import Store
+    from driver.token import get as get_val
+    from driver.playwright_driver import PlaywrightController
+    from driver.success import getStatus
+    from jobs.failauth import send_wx_code
+
+    if not getStatus():
+        print_info("微信登录保活：无已保存登录态，跳过（请先扫码登录）")
+        return
+
+    async def _refresh():
+        controller = PlaywrightController()
+        try:
+            await controller.start_browser()
+            cookie = Store.load()
+            if not cookie:
+                print_warning("微信登录保活：本地无 cookie，请先扫码登录")
+                return False
+            for ck in cookie:
+                ck.setdefault('domain', 'mp.weixin.qq.com')
+                ck.setdefault('path', '/')
+            await controller.add_cookies(cookie)
+            token = str(get_val('token', ''))
+            await controller.open_url(f"{WX_API.WX_HOME}?t=home/index&lang=zh_CN&token={token}")
+            await asyncio.sleep(8)
+            # 会话有效则停留在 cgi-bin/home；失效会被重定向回登录页
+            if 'cgi-bin/home' not in controller.page.url:
+                print_error("微信登录保活：会话已过期，请重新扫码登录")
+                send_wx_code("微信登录保活检测到会话过期")
+                return False
+            WX_API._temp_controller = controller
+            try:
+                # 只刷新会话与 token，不重抓公众号统计信息
+                await WX_API.Call_Success(has_extdata=False)
+            finally:
+                WX_API._temp_controller = None
+            return True
+        finally:
+            try:
+                await controller.cleanup()
+            except Exception:
+                pass
+
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        ok = loop.run_until_complete(_refresh())
+        if ok and getStatus():
+            print_success("微信登录保活：会话已刷新")
+    except Exception as e:
+        print_error(f"微信登录保活：执行出错: {e}")
+    finally:
+        loop.close()
+
+def start_wx_token_refresh():
+    """启动微信登录态定时保活任务（server.wx_token_refresh_enabled 控制，默认关闭）"""
+    cron_exp = str(cfg.get("server.wx_token_refresh_cron", "0 */12 * * *"))
+    scheduler.add_cron_job(
+        refresh_wx_token,
+        cron_expr=cron_exp,
+        job_id="wx_token_refresh",
+        tag="微信登录保活"
+    )
+    print_success(f"微信登录保活任务已启动，cron: {cron_exp}")
 
 if __name__ == '__main__':
     # do_job()

@@ -22,6 +22,10 @@ server:
    article_stats_refresh_enabled: ${ARTICLE_STATS_REFRESH_ENABLED:-False}
    # 文章统计刷新间隔 默认300秒
    article_stats_refresh_interval: ${ARTICLE_STATS_REFRESH_INTERVAL:-3600}
+   #是否启用微信登录态定时保活（用已存cookie静默重登，显著减少扫码频率）默认False
+   wx_token_refresh_enabled: ${WX_TOKEN_REFRESH_ENABLED:-False}
+   #微信登录保活cron表达式 默认每12小时
+   wx_token_refresh_cron: "${WX_TOKEN_REFRESH_CRON:-0 */12 * * *}"
 
 #数据库连接 例如db:  mysql+pymysql://<username>:<password>@<host>/we-rss?charset=utf8mb4
 #PostgreSQL 连接示例: postgresql://<username>:<password>@<host>/<database>

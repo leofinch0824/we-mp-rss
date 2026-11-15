@@ -31,6 +31,8 @@ services:
       ENABLE_XVFB: "true"
       HEADLESS: "false"
       DISPLAY: :99
+      # 微信登录态定时保活（见 config.example.yaml server 段）
+      WX_TOKEN_REFRESH_ENABLED: "true"
     ports:
       - "127.0.0.1:8001:8001"
     volumes:
@@ -49,6 +51,7 @@ services:
       - ../data_sync.py:/app/data_sync.py
       - ../job.py:/app/job.py
       - ../data:/app/data
+      - ../config.yaml:/app/config.yaml
     depends_on:
       redis:
         condition: service_healthy
