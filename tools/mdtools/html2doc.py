@@ -49,6 +49,8 @@ def html_to_markdown(html_content: str,
             - localize_images: 是否把微信图片下载到本地 media 目录并改写为相对路径引用
             - media_dir: 图片保存目录（localize_images 为 True 时必填）
             - media_prefix: Markdown 中的引用前缀（默认 "./media"）
+            - _media_stats:（输出项）本地化统计 {'localized': n, 'failed': n}，
+              localize_images 开启时转换结束后回写到调用方传入的 config 字典
 
     Returns:
         Markdown 内容
@@ -89,7 +91,11 @@ def html_to_markdown(html_content: str,
         
         # 后处理 Markdown
         markdown_content = _postprocess_markdown(markdown_content)
-        
+
+        # 把本地化统计回写给调用方（见 config 文档中的 _media_stats）
+        if isinstance(config, dict) and '_media_stats' in default_config:
+            config['_media_stats'] = default_config['_media_stats']
+
         return markdown_content
         
     except Exception as e:
@@ -110,13 +116,39 @@ _CONTENT_TYPE_EXT_MAP = {
     "image/vnd.microsoft.icon": ".ico",
 }
 
+# URL 路径里出现的扩展名只信任这些，其余（如 .aspx）继续走 wx_fmt / Content-Type
+_KNOWN_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".ico", ".bmp"}
+
+_proxies_cache: Optional[Dict[str, str]] = None
+_proxies_loaded = False
+
+
+def _get_proxies() -> Optional[Dict[str, str]]:
+    """读取应用级代理配置（与 core/wx/base.py 行为一致），供图片下载使用。
+
+    数据中心部署直连微信 CDN 会被封（singbox sidecar 即为此设计），
+    这类环境下不走代理的下载必然全部失败。
+    """
+    global _proxies_cache, _proxies_loaded
+    if not _proxies_loaded:
+        _proxies_loaded = True
+        try:
+            from core.config import cfg
+            if cfg.get("proxy.enabled", False):
+                proxy_url = cfg.get("proxy.http_url", "")
+                if proxy_url:
+                    _proxies_cache = {"http": proxy_url, "https": proxy_url}
+        except Exception:
+            _proxies_cache = None
+    return _proxies_cache
+
 
 def _image_ext_from_url(img_url: str, content_type: Optional[str] = None) -> str:
     """从 URL 路径、wx_fmt 参数、Content-Type 依次推断图片扩展名，默认 .jpg。"""
     from urllib.parse import urlparse, parse_qs
 
     path_ext = os.path.splitext(urlparse(img_url).path)[1].lower()
-    if path_ext.startswith(".") and 1 < len(path_ext) <= 5:
+    if path_ext in _KNOWN_IMAGE_EXTS:
         return ".jpg" if path_ext == ".jpeg" else path_ext
 
     # 微信 CDN 图片多数没有扩展名，真实格式放在 wx_fmt 查询参数里
@@ -149,14 +181,19 @@ def _download_image(img_url: str, media_dir: str) -> Optional[str]:
 
         os.makedirs(media_dir, exist_ok=True)
         file_stem = hashlib.sha256(img_url.encode("utf-8")).hexdigest()
-        # 命中已下载文件（含历史导出）则直接复用，扩展名可能不同
+        # 命中已下载文件则直接复用（主要发生在同批次导出内；
+        # 注意导出打包后源文件会被清理，跨批次复用仅在打包失败时存在）
         for existing in os.listdir(media_dir):
             if existing.startswith(file_stem):
                 return existing
 
-        response = requests.get(img_url, timeout=10)
+        response = requests.get(img_url, timeout=10, proxies=_get_proxies())
         response.raise_for_status()
         if not response.content:
+            return None
+
+        # requests 默认跟随重定向，落点可能已离开白名单域名
+        if urlparse(response.url).netloc not in _IMAGE_HOST_WHITELIST:
             return None
 
         ext = _image_ext_from_url(img_url, response.headers.get("Content-Type"))
@@ -169,19 +206,23 @@ def _download_image(img_url: str, media_dir: str) -> Optional[str]:
         return None
 
 
-def _localize_images(soup, media_dir: str, media_prefix: str) -> int:
+def _localize_images(soup, media_dir: str, media_prefix: str) -> tuple:
     """把正文中的微信图片下载到本地，src 改写为相对路径引用。
 
-    下载失败的图片保留原始远程 URL，不影响导出继续。
+    下载前先把真实 URL（data-src 优先）提升到 src：微信文章里 src 常是
+    懒加载占位图（data-URI），这样下载失败时留下的是原始远程 URL。
 
     Returns:
-        成功本地化的图片数量。
+        (成功本地化数量, 下载失败数量)。
     """
     localized = 0
+    failed = 0
     for img in soup.find_all('img'):
         img_url = img.get('data-src') or img.get('src')
         if not img_url or not img_url.startswith(('http://', 'https://')):
             continue
+
+        img['src'] = img_url
 
         file_name = _download_image(img_url, media_dir)
         if file_name:
@@ -193,7 +234,9 @@ def _localize_images(soup, media_dir: str, media_prefix: str) -> int:
                 if img.has_attr(attr):
                     del img[attr]
             localized += 1
-    return localized
+        else:
+            failed += 1
+    return localized, failed
 
 
 def _preprocess_html(html_content: str, config: Dict[str, Any]) -> str:
@@ -231,11 +274,12 @@ def _preprocess_html(html_content: str, config: Dict[str, Any]) -> str:
                 img.decompose()
         elif config.get('localize_images', False) and config.get('media_dir'):
             # 下载图片到本地 media 目录，引用改写为相对路径
-            _localize_images(
+            localized, failed = _localize_images(
                 soup,
                 media_dir=config['media_dir'],
                 media_prefix=config.get('media_prefix', './media'),
             )
+            config['_media_stats'] = {'localized': localized, 'failed': failed}
         else:
             # 保留图片的 title 属性作为 alt
             for img in soup.find_all('img'):

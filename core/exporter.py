@@ -282,6 +282,16 @@ async def _export_articles_async(
                         })
                     document_title = art.title if add_title else None
                     html_to_markdown_file(art.content, md_path, document_title, cfg_local)
+                    media_stats = cfg_local.get("_media_stats") or {}
+                    media_failed = media_stats.get("failed", 0)
+                    if media_failed:
+                        print_warning(
+                            f"图片本地化 {art.id}: {media_failed} 张下载失败，已保留原链接")
+                        _report(
+                            progress_callback, "writing_files",
+                            f"{art.title[:30]}：{media_failed} 张图片下载失败，已保留原链接",
+                            base_progress,
+                        )
                 except Exception as e:
                     print_warning(f"Markdown 失败 {art.id}: {e}")
 

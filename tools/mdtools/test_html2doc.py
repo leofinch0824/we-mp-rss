@@ -56,10 +56,23 @@ class TestLocalizeImages(unittest.TestCase):
         dl.assert_called_once_with("https://mmbiz.qlogo.cn/cover.png", "/tmp/test_media")
         self.assertIn("./media/hash2.png", md)
 
-    def test_download_failure_keeps_original_url(self):
+    def test_download_failure_keeps_real_url_not_placeholder(self):
+        # 微信真实标记：src 是懒加载占位 data-URI，data-src 才是真实图
+        html = ('<img src="data:image/svg+xml,placeholder" title="t"'
+                ' data-src="https://mmbiz.qpic.cn/real/640?wx_fmt=png">')
         with mock.patch.object(html2doc, "_download_image", return_value=None):
-            md = html2doc.html_to_markdown(SAMPLE_HTML, self._config())
-        self.assertIn("https://mmbiz.qpic.cn/mmbiz_jpg/abc123/640", md)
+            md = html2doc.html_to_markdown(html, self._config())
+        self.assertIn("https://mmbiz.qpic.cn/real/640", md)
+        self.assertNotIn("data:image/svg+xml", md)
+
+    def test_media_stats_recorded_into_config(self):
+        html = ('<p><img src="https://mmbiz.qpic.cn/a/640?wx_fmt=png"></p>'
+                '<p><img src="https://mmbiz.qpic.cn/b/640?wx_fmt=png"></p>')
+        cfg = self._config()
+        with mock.patch.object(
+                html2doc, "_download_image", side_effect=["hash_ok.png", None]):
+            html2doc.html_to_markdown(html, cfg)
+        self.assertEqual(cfg.get("_media_stats"), {"localized": 1, "failed": 1})
 
     def test_remove_images_takes_precedence(self):
         with mock.patch.object(html2doc, "_download_image") as dl:
@@ -87,6 +100,20 @@ class TestLocalizeImages(unittest.TestCase):
         self.assertIn("./media/hash3.webp", content)
 
 
+class _FakeResponse:
+    """模拟 requests.Response，隔离真实网络。"""
+
+    def __init__(self, content=b"img-bytes", url=None, headers=None):
+        self.content = content
+        self.status_code = 200
+        self.url = url  # requests 重定向后的最终 URL
+        self.headers = headers or {}
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise html2doc.requests.HTTPError(str(self.status_code))
+
+
 class TestDownloadImage(unittest.TestCase):
     def test_non_whitelisted_host_returns_none(self):
         # 非微信 CDN 域名直接拒绝，不应发起网络请求
@@ -94,6 +121,30 @@ class TestDownloadImage(unittest.TestCase):
             self.assertIsNone(
                 html2doc._download_image("https://example.com/a.jpg", tmp))
             # 白名单外的 URL 不会创建任何文件
+            self.assertEqual(os.listdir(tmp), [])
+
+    def test_success_writes_file_and_reuses(self):
+        url = "https://mmbiz.qpic.cn/abc/640"
+        fake = _FakeResponse(url=url, headers={"Content-Type": "image/png"})
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(
+                    html2doc.requests, "get", return_value=fake) as get:
+                name1 = html2doc._download_image(url, tmp)
+                name2 = html2doc._download_image(url, tmp)
+            # 扩展名取自 Content-Type，且第二次命中本地文件不再发请求
+            self.assertTrue(name1.endswith(".png"))
+            self.assertEqual(name1, name2)
+            self.assertEqual(get.call_count, 1)
+            # 必须显式带 proxies 参数（走应用代理配置）
+            self.assertIn("proxies", get.call_args.kwargs)
+
+    def test_redirect_off_whitelist_discarded(self):
+        # 白名单 URL 重定向到站外：字节不入库
+        fake = _FakeResponse(url="https://evil.com/payload.png")
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(html2doc.requests, "get", return_value=fake):
+                self.assertIsNone(
+                    html2doc._download_image("https://mmbiz.qpic.cn/a/640", tmp))
             self.assertEqual(os.listdir(tmp), [])
 
 
@@ -110,6 +161,13 @@ class TestImageExtFromUrl(unittest.TestCase):
         url = "https://mmbiz.qpic.cn/mmbiz_png/abc/640?wx_fmt=png"
         self.assertEqual(html2doc._image_ext_from_url(url), ".png")
         url = "https://mmbiz.qpic.cn/mmbiz_jpg/abc/640?wx_fmt=jpeg"
+        self.assertEqual(html2doc._image_ext_from_url(url), ".jpg")
+
+    def test_unknown_path_ext_falls_through(self):
+        # .aspx 等非图片扩展名不信任，继续用 wx_fmt / Content-Type
+        url = "https://mmbiz.qpic.cn/a.aspx?wx_fmt=png"
+        self.assertEqual(html2doc._image_ext_from_url(url), ".png")
+        url = "https://mmbiz.qpic.cn/a.aspx"
         self.assertEqual(html2doc._image_ext_from_url(url), ".jpg")
 
     def test_content_type_fallback(self):
