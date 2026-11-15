@@ -510,7 +510,9 @@ class WXArticleFetcher:
             # 从URL中提取ID部分
             match = re.search(r'/s/([A-Za-z0-9_-]+)', url)
             if not match:
-                return ""
+                # 长链形态 /s?__biz=...&sn=...：sn 即永久标识，非 base64，直接返回
+                sn_match = re.search(r'[?&]sn=([A-Za-z0-9_-]+)', url)
+                return sn_match.group(1) if sn_match else ""
                 
             id_str = match.group(1)
             

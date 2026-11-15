@@ -279,6 +279,9 @@ def reload_job():
     scheduler.clear_all_jobs()
     TaskQueue.clear_queue()
     start_job()
+    # 保活任务不随消息任务重载而丢失
+    if cfg.get("server.wx_token_refresh_enabled", False):
+        start_wx_token_refresh()
 
 def run(job_id:str=None,isTest=False):
     from .taskmsg import get_message_task
@@ -372,12 +375,9 @@ def refresh_wx_token():
                 print_error("微信登录保活：会话已过期，请重新扫码登录")
                 send_wx_code("微信登录保活检测到会话过期")
                 return False
-            WX_API._temp_controller = controller
-            try:
-                # 只刷新会话与 token，不重抓公众号统计信息
-                await WX_API.Call_Success(has_extdata=False)
-            finally:
-                WX_API._temp_controller = None
+            # 显式传控制器，不复用/不复位全局 _temp_controller：
+            # 并发扫码登录时后者会被别的登录回调改写，导致跨事件循环 await
+            await WX_API.Call_Success(has_extdata=False, controller=controller)
             return True
         finally:
             try:
@@ -397,7 +397,12 @@ def refresh_wx_token():
         loop.close()
 
 def start_wx_token_refresh():
-    """启动微信登录态定时保活任务（server.wx_token_refresh_enabled 控制，默认关闭）"""
+    """启动微信登录态定时保活任务（server.wx_token_refresh_enabled 控制，默认关闭）
+
+    保活自持调度器生命周期：没有消息任务（start_job 未启动调度器）或
+    未开 -job 的环境也要确保调度器在跑（start 幂等，见 core/task/task.py）；
+    reload_job 清空后也会重新注册。
+    """
     cron_exp = str(cfg.get("server.wx_token_refresh_cron", "0 */12 * * *"))
     scheduler.add_cron_job(
         refresh_wx_token,
@@ -405,6 +410,7 @@ def start_wx_token_refresh():
         job_id="wx_token_refresh",
         tag="微信登录保活"
     )
+    scheduler.start()
     print_success(f"微信登录保活任务已启动，cron: {cron_exp}")
 
 if __name__ == '__main__':

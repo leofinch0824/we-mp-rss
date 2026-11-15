@@ -46,11 +46,11 @@ class Wx:
         if os.path.exists(self.wx_login_url):
             return True
         return False
-    async def extract_token_from_requests(self):
+    async def extract_token_from_requests(self, controller=None):
         """从页面中提取token（异步）"""
         try:
-            # 优先使用临时控制器，其次使用默认控制器
-            controller = getattr(self, '_temp_controller', None) or self.controller
+            # 显式传入优先（保活等独立事件循环场景），其次临时控制器，最后默认控制器
+            controller = controller or getattr(self, '_temp_controller', None) or self.controller
 
             if not controller or not controller.page:
                 return None
@@ -622,16 +622,16 @@ class Wx:
                 'wx_login_url': self.wx_login_url,
                 'expiry': cookie_expiry
             }
-    async def Call_Success(self, has_extdata=True):
+    async def Call_Success(self, has_extdata=True, controller=None):
         """处理登录成功后的回调逻辑（异步）"""
-        # 优先使用临时控制器（用于多线程场景），其次使用默认控制器
-        controller = getattr(self, '_temp_controller', None) or self.controller
+        # 显式传入优先（避免与扫码登录并发时经 _temp_controller 串到别的控制器/事件循环）
+        controller = controller or getattr(self, '_temp_controller', None) or self.controller
         if controller is None:
             print_error("浏览器控制器未初始化")
             return None
 
         # 获取token
-        token = await self.extract_token_from_requests()
+        token = await self.extract_token_from_requests(controller)
 
         # 获取当前所有cookie
         cookies = await controller.get_cookies()

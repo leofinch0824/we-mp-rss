@@ -15,7 +15,7 @@ description: 导出微信公众号文章为 Markdown 并将图片持久化到本
    ```bash
    docker compose -f compose/docker-compose.dev.yaml ps --format "{{.Name}} {{.Status}}"
    ```
-   若 `we-mp-rss-backend-dev` 不是 Up，先 `docker compose -f compose/docker-compose.dev.yaml up -d` 并等它健康（`docker logs -f we-mp-rss-backend-dev` 直到出现 startup complete，或轮询 `curl -s http://127.0.0.1:8001/api/v1/wx/sys_info`）。
+   若 `we-mp-rss-backend-dev` 不是 Up，先 `docker compose -f compose/docker-compose.dev.yaml up -d` 并等它健康（`docker logs -f we-mp-rss-backend-dev` 直到出现 startup complete，或轮询 `curl -s http://127.0.0.1:8001/api/v1/wx/sys/info`）。
 
 3. **运行导出脚本**（在仓库根目录）：
    ```bash
@@ -40,7 +40,7 @@ downloads/articles/index.json   # 索引，按 id 去重
 
 - **无法连接 API**：服务没起，回到第 2 步。
 - **登录失败/401**：默认凭据 admin/admin@123 不对 → 让用户用 `.env` 里设置的 `USERNAME`/`PASSWORD`（或直接问用户），传 `--user/--password`。
-- **"微信公众号授权已过期"**（脚本预检 `/sys_info/info` 的 `wx.login=false` 触发）：自动保活未启用，无法自动恢复。让用户打开 http://127.0.0.1:5173 重新扫码授权，完成后再重跑脚本。
+- **"微信公众号授权已过期"**（脚本预检 `/sys/info` 的 `wx.login=false` 触发）：自动保活未启用或已失效，无法自动恢复。让用户打开 http://127.0.0.1:5173 重新扫码授权，完成后再重跑脚本。
 - **抓取失败、提示登录状态**：微信后台会话中途失效，同上一条处理。
 - **导出失败但抓取成功**：看 `docker logs we-mp-rss-backend-dev` 尾部，多为偶发网络问题，直接重跑一次。
 

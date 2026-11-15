@@ -167,12 +167,14 @@ def submit_and_wait(api: Api, url: str, timeout: int) -> dict:
 
 
 def find_article_meta(api: Api, article_id: str) -> dict:
-    """从文章列表接口取发布时间等元信息（精选 feed 文章量小，直接遍历）"""
-    r = api.get_json(f"/articles?mp_id={FEATURED_MP_ID}&limit=100&offset=0")
-    for row in ((r or {}).get("data") or {}).get("list") or []:
-        if row.get("id") == article_id:
-            return row
-    return {}
+    """按 id 取文章详情（含发布时间）。
+
+    不走列表接口：列表按发布时间倒序取最新 N 条，导出老文章会拿不到
+    元数据、退化成无日期目录名，重复导出还会产生跨天副本。
+    """
+    r = api.get_json(f"/articles/{urllib.parse.quote(article_id, safe='')}")
+    row = (r or {}).get("data")
+    return row if isinstance(row, dict) and row.get("id") else {}
 
 
 def export_and_wait(api: Api, doc_id: str, timeout: int) -> str:
@@ -211,9 +213,9 @@ def export_and_wait(api: Api, doc_id: str, timeout: int) -> str:
     return filename
 
 
-def download_zip(api: Api, filename: str) -> Path:
-    tmp = tempfile.mkdtemp(prefix="wemprss_export_")
-    path = Path(tmp) / filename
+def download_zip(api: Api, filename: str, tmp_dir: Path) -> Path:
+    """下载导出 zip 到调用方持有的临时目录（目录生命周期由调用方管理）"""
+    path = tmp_dir / filename
     with open(path, "wb") as f:
         api._request("GET", f"/tools/export/download?mp_id={FEATURED_MP_ID}&filename={urllib.parse.quote(filename)}"
                      f"&delete_after_download=true",  # 下载完成即清理服务端 zip
@@ -226,8 +228,12 @@ def download_zip(api: Api, filename: str) -> Path:
 def place_article(zip_path: Path, sn: str, url: str, article: dict, out_root: Path) -> dict:
     """解包并按 <发布日期>-<sn>/ 布局落盘，写 meta.json 与索引，返回摘要"""
     extract_dir = zip_path.parent / "unpacked"
-    with zipfile.ZipFile(zip_path) as zf:
-        zf.extractall(extract_dir)
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            zf.extractall(extract_dir)
+    except (zipfile.BadZipFile, RuntimeError, OSError) as e:
+        # 坏包/半截包（如下载中断）转为用户可读错误，不裸抛栈
+        raise PipelineError(f"导出包解析失败（{type(e).__name__}），可能下载不完整，请重试") from e
 
     md_files = [p for p in extract_dir.glob("*.md")]
     if not md_files:
@@ -278,17 +284,47 @@ def place_article(zip_path: Path, sn: str, url: str, article: dict, out_root: Pa
 
     update_index(out_root, meta)
 
-    shutil.rmtree(zip_path.parent, ignore_errors=True)
     return meta
 
 
+def _rebuild_index(out_root: Path) -> list:
+    """index.json 损坏时的兜底：从各文章目录的 meta.json 重建索引"""
+    entries = []
+    for meta_file in sorted(out_root.glob("*/meta.json")):
+        try:
+            m = json.loads(meta_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        entries.append({
+            "id": m.get("id") or meta_file.parent.name, "title": m.get("title", ""),
+            "url": m.get("url", ""), "publish_time": m.get("publish_time"),
+            "exported_at": m.get("exported_at", ""), "images": m.get("images", 0),
+            "path": meta_file.parent.name,
+        })
+    return entries
+
+
 def update_index(out_root: Path, meta: dict) -> None:
-    """追加式索引：同 id 覆盖更新，保持时间倒序"""
+    """追加式索引：同 id 覆盖更新，保持时间倒序。
+
+    索引损坏时不静默丢弃：先备份再从 meta.json 重建；写入用临时文件+原子替换，
+    避免中断留下半截 index.json。
+    """
     index_path = out_root / "index.json"
-    try:
-        entries = json.loads(index_path.read_text(encoding="utf-8")) if index_path.exists() else []
-    except (json.JSONDecodeError, OSError):
-        entries = []
+    entries = []
+    if index_path.exists():
+        try:
+            loaded = json.loads(index_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, list):
+                entries = loaded
+        except (json.JSONDecodeError, OSError):
+            backup = out_root / f"index.corrupt-{datetime.now().strftime('%Y%m%d%H%M%S')}.json"
+            try:
+                os.replace(index_path, backup)
+                log(f"警告: index.json 无法解析，已备份为 {backup.name}，将从 meta.json 重建索引")
+            except OSError:
+                pass
+            entries = _rebuild_index(out_root)
     entries = [e for e in entries if e.get("id") != meta["id"]]
     entries.append({
         "id": meta["id"], "title": meta["title"], "url": meta["url"],
@@ -296,7 +332,9 @@ def update_index(out_root: Path, meta: dict) -> None:
         "images": meta["images"], "path": meta["id"],
     })
     entries.sort(key=lambda e: (e.get("publish_time") or 0, e.get("exported_at") or ""), reverse=True)
-    index_path.write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp = index_path.with_name("index.json.tmp")
+    tmp.write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, index_path)
 
 
 def export_one(api: Api, url: str, out_root: Path, timeout: int) -> dict:
@@ -329,8 +367,13 @@ def export_one(api: Api, url: str, out_root: Path, timeout: int) -> dict:
     filename = export_and_wait(api, article_id, timeout)
     log(f"[{url}] 导出完成: {filename}")
 
-    zip_path = download_zip(api, filename)
-    meta = place_article(zip_path, sn, url, article, out_root)
+    # 临时目录由本函数持有：成功失败都清理，不留半截 zip/解包残留
+    tmp_dir = Path(tempfile.mkdtemp(prefix="wemprss_export_"))
+    try:
+        zip_path = download_zip(api, filename, tmp_dir)
+        meta = place_article(zip_path, sn, url, article, out_root)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
     meta["updated"] = bool(existed)
     log(f"[{url}] 落盘: {meta['id']}/ 图片 {meta['images']} 张"
         f"{'（覆盖旧导出）' if meta['updated'] else ''}")

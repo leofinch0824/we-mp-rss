@@ -282,7 +282,8 @@ async def add_featured_article(
                     message="请输入文章链接"
                 )
             )
-        if "mp.weixin.qq.com/s/" not in target_url:
+        if "mp.weixin.qq.com/s/" not in target_url and "mp.weixin.qq.com/s?" not in target_url:
+            # 同时接受 /s/<sn> 短链与 /s?__biz=...&sn=... 长链两种形态
             raise HTTPException(
                 status_code=status.HTTP_201_CREATED,
                 detail=error_response(
