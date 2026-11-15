@@ -27,6 +27,7 @@ sn（/s/ 后那段）由微信生成、全局唯一且不变，因此：
 凭据默认 admin/admin@123，可用 --user/--password 或环境变量 WEMPRSS_USER/WEMPRSS_PASS 覆盖。
 """
 import argparse
+import http.client
 import json
 import os
 import re
@@ -92,6 +93,11 @@ class Api:
             raise PipelineError(
                 f"无法连接 {self.base}（服务未启动？docker compose -f compose/docker-compose.dev.yaml up -d）"
             ) from e
+        except (OSError, http.client.HTTPException) as e:
+            # 连接中断/响应中断（如服务正在重启）
+            raise PipelineError(
+                f"连接 {self.base} 中断（{type(e).__name__}: {e}），服务可能正在重启，稍后重试"
+            ) from e
 
     def login(self, user: str, password: str) -> None:
         r = self._request("POST", "/auth/login", form={"username": user, "password": password})
@@ -99,6 +105,18 @@ class Api:
         if not data.get("access_token"):
             raise PipelineError(f"登录失败: {r.get('message')}")
         self.token = data["access_token"]
+
+    def check_auth(self) -> bool:
+        """检查微信公众号授权是否过期（/sys/info 的 wx.login，注意路由前缀是 /sys）"""
+        try:
+            r = self.get_json("/sys/info")
+            wx = ((r or {}).get("data") or {}).get("wx") or {}
+            return bool(wx.get("login"))
+        except PipelineError:
+            raise
+        except Exception:
+            # 状态接口异常不阻断导出，让后续抓取阶段暴露真实错误
+            return True
 
     def post_json(self, path: str, body):
         return self._request("POST", path, body=body)
@@ -197,7 +215,8 @@ def download_zip(api: Api, filename: str) -> Path:
     tmp = tempfile.mkdtemp(prefix="wemprss_export_")
     path = Path(tmp) / filename
     with open(path, "wb") as f:
-        api._request("GET", f"/tools/export/download?mp_id={FEATURED_MP_ID}&filename={urllib.parse.quote(filename)}",
+        api._request("GET", f"/tools/export/download?mp_id={FEATURED_MP_ID}&filename={urllib.parse.quote(filename)}"
+                     f"&delete_after_download=true",  # 下载完成即清理服务端 zip
                      stream_to=f)
     if path.stat().st_size < 100:
         raise PipelineError("下载的导出包异常（过小）")
@@ -337,6 +356,11 @@ def main() -> int:
         api = Api(args.base)
         api.login(args.user, args.password)
         log(f"已登录 {args.base}，输出目录: {out_root}")
+        if not api.check_auth():
+            raise PipelineError(
+                "微信公众号授权已过期（无可用会话），自动刷新未启用。"
+                "请打开 http://127.0.0.1:5173 扫码重新授权后再导出。"
+            )
         for url in args.url:
             try:
                 results.append(export_one(api, url.strip(), out_root, args.timeout))

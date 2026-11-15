@@ -19,9 +19,10 @@ description: 导出微信公众号文章为 Markdown 并将图片持久化到本
 
 3. **运行导出脚本**（在仓库根目录）：
    ```bash
-   python3 scripts/export_article.py --url <链接1> [--url <链接2> ...]
+   python3 scripts/export_article.py --url <链接1> [--url <链接2> ...] [--out <用户指定目录>]
    ```
    进度信息走 stderr 可忽略；**最后一行 stdout 是 JSON 摘要**，解析它。
+   用户在消息里指定了保存位置（如"保存到 ~/Documents/wx"）→ 传 `--out`；未指定则省略，脚本默认输出到 `downloads/articles/`。
 
 4. **按摘要汇报**：对每个条目给出 `id`（目录名）、标题、图片张数、落盘路径；`"updated": true` 表示覆盖了旧导出（幂等刷新）。`ok: false` 的条目单独说明 error。
 
@@ -39,11 +40,13 @@ downloads/articles/index.json   # 索引，按 id 去重
 
 - **无法连接 API**：服务没起，回到第 2 步。
 - **登录失败/401**：默认凭据 admin/admin@123 不对 → 让用户用 `.env` 里设置的 `USERNAME`/`PASSWORD`（或直接问用户），传 `--user/--password`。
-- **抓取失败、提示登录状态**：微信后台会话过期，让用户打开 http://127.0.0.1:5173 重新扫码授权。
+- **"微信公众号授权已过期"**（脚本预检 `/sys_info/info` 的 `wx.login=false` 触发）：自动保活未启用，无法自动恢复。让用户打开 http://127.0.0.1:5173 重新扫码授权，完成后再重跑脚本。
+- **抓取失败、提示登录状态**：微信后台会话中途失效，同上一条处理。
 - **导出失败但抓取成功**：看 `docker logs we-mp-rss-backend-dev` 尾部，多为偶发网络问题，直接重跑一次。
 
 ## 备注
 
 - 重复导出同一篇 = 原地刷新，不会产生副本；目录名由发布日期 + 微信侧永久 sn 组成，标题不参与命名。
+- zip 双端自动清理：服务端下载后即删（`delete_after_download=true`）并清空打包残留目录，客户端解包后删临时 zip，不会留垃圾文件。
 - 图片失败数会体现在后端日志/导出消息里；md 中保留远程 URL 兜底。
 - 修改导出选项（如去链接、去图片）不属于本 skill 范围，让用户去前端工具页操作。

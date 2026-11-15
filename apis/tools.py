@@ -193,6 +193,14 @@ async def export_articles(
                                         os.remove(fp)
                                     except Exception as e:
                                         print_error(f"删除文件失败 {fp}: {e}")
+                        # 清理打包后遗留的空目录（如 media/）
+                        for root, dirs, _ in os.walk(docx_path, topdown=False):
+                            for d in dirs:
+                                dp = os.path.join(root, d)
+                                try:
+                                    os.rmdir(dp)  # 仅空目录可删，非空自动跳过
+                                except OSError:
+                                    pass
                         manager.finish(
                             job.job_id, ok=True,
                             message=f"导出完成：共 {processed} 篇（跳过 {skipped} 篇）",
