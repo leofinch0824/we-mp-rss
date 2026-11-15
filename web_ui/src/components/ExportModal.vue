@@ -26,6 +26,10 @@
         <a-space direction="vertical">
           <a-checkbox v-model="form.add_title">添加标题</a-checkbox>
           <a-checkbox v-model="form.remove_images">移除图片</a-checkbox>
+          <a-checkbox
+            v-model="form.localize_images"
+            :disabled="form.remove_images || !form.format.includes('md')"
+          >下载图片到本地（Markdown）</a-checkbox>
           <a-checkbox v-model="form.remove_links">移除链接</a-checkbox>
         </a-space>
       </a-form-item>
@@ -49,6 +53,7 @@ const form = ref({
   add_title: true,
   remove_images: false,
   remove_links: false,
+  localize_images: false,
   zip_filename: '',
 });
 

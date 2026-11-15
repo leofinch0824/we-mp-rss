@@ -123,6 +123,7 @@ def _export_articles_optimized(
     add_title: bool,
     remove_images: bool,
     remove_links: bool,
+    localize_images: bool,
     export_md: bool,
     export_docx: bool,
     export_json: bool,
@@ -142,6 +143,7 @@ def _export_articles_optimized(
             add_title=add_title,
             remove_images=remove_images,
             remove_links=remove_links,
+            localize_images=localize_images,
             export_md=export_md,
             export_docx=export_docx,
             export_json=export_json,
@@ -163,6 +165,7 @@ async def _export_articles_async(
     add_title: bool,
     remove_images: bool,
     remove_links: bool,
+    localize_images: bool,
     export_md: bool,
     export_json: bool,
     export_csv: bool,
@@ -246,6 +249,7 @@ async def _export_articles_async(
     processed = 0
     csv_file = None
     csv_writer = None
+    media_dir = os.path.join(docx_path, "media")
     if export_csv:
         csv_file = open(os.path.join(docx_path, "articles.csv"), "w", newline="", encoding="utf-8")
         csv_writer = csv.writer(csv_file)
@@ -269,6 +273,13 @@ async def _export_articles_async(
                         "remove_images": remove_images,
                         "remove_links": remove_links,
                     }
+                    if localize_images and not remove_images:
+                        # 图片下载到导出目录 media/，引用改写为相对路径
+                        cfg_local.update({
+                            "localize_images": True,
+                            "media_dir": media_dir,
+                            "media_prefix": "./media",
+                        })
                     document_title = art.title if add_title else None
                     html_to_markdown_file(art.content, md_path, document_title, cfg_local)
                 except Exception as e:

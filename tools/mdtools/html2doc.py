@@ -19,8 +19,12 @@ Author: AI Assistant
 Date: 2025/04/15
 """
 
+import os
 import re
+import hashlib
 from typing import Optional, Dict, Any
+
+import requests
 from bs4 import BeautifulSoup
 
 try:
@@ -42,13 +46,16 @@ def html_to_markdown(html_content: str,
             - strip: 要移除的标签列表
             - escape_asterisks: 是否转义星号
             - escape_underscores: 是否转义下划线
-            
+            - localize_images: 是否把微信图片下载到本地 media 目录并改写为相对路径引用
+            - media_dir: 图片保存目录（localize_images 为 True 时必填）
+            - media_prefix: Markdown 中的引用前缀（默认 "./media"）
+
     Returns:
         Markdown 内容
     """
     if not html_content:
         return ""
-    
+
     # 默认配置
     default_config = {
         'heading_style': 'ATX',
@@ -58,6 +65,9 @@ def html_to_markdown(html_content: str,
         'escape_underscores': False,
         'remove_images': False,
         'remove_links': False,
+        'localize_images': False,
+        'media_dir': None,
+        'media_prefix': './media',
     }
     
     if config:
@@ -85,6 +95,105 @@ def html_to_markdown(html_content: str,
     except Exception as e:
         print(f"HTML 转 Markdown 失败: {e}")
         return ""
+
+
+# 仅允许下载微信公众号图片 CDN（与 apis/res.py 反向代理白名单保持一致）
+_IMAGE_HOST_WHITELIST = ("mmbiz.qpic.cn", "mmbiz.qlogo.cn", "mmecoa.qpic.cn")
+
+_CONTENT_TYPE_EXT_MAP = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+    "image/svg+xml": ".svg",
+    "image/x-icon": ".ico",
+    "image/vnd.microsoft.icon": ".ico",
+}
+
+
+def _image_ext_from_url(img_url: str, content_type: Optional[str] = None) -> str:
+    """从 URL 路径、wx_fmt 参数、Content-Type 依次推断图片扩展名，默认 .jpg。"""
+    from urllib.parse import urlparse, parse_qs
+
+    path_ext = os.path.splitext(urlparse(img_url).path)[1].lower()
+    if path_ext.startswith(".") and 1 < len(path_ext) <= 5:
+        return ".jpg" if path_ext == ".jpeg" else path_ext
+
+    # 微信 CDN 图片多数没有扩展名，真实格式放在 wx_fmt 查询参数里
+    wx_fmt = (parse_qs(urlparse(img_url).query).get("wx_fmt") or [""])[0].lower()
+    if wx_fmt:
+        if wx_fmt == "jpeg":
+            return ".jpg"
+        ext = "." + wx_fmt
+        if ext in _CONTENT_TYPE_EXT_MAP.values():
+            return ext
+
+    if content_type:
+        return _CONTENT_TYPE_EXT_MAP.get(
+            content_type.split(";")[0].strip().lower(), ".jpg")
+
+    return ".jpg"
+
+
+def _download_image(img_url: str, media_dir: str) -> Optional[str]:
+    """下载图片到 media_dir，文件名取 URL 的 sha256（幂等、跨文章去重）。
+
+    Returns:
+        成功返回文件名（不含目录），失败或域名不在白名单返回 None。
+    """
+    from urllib.parse import urlparse
+
+    try:
+        if urlparse(img_url).netloc not in _IMAGE_HOST_WHITELIST:
+            return None
+
+        os.makedirs(media_dir, exist_ok=True)
+        file_stem = hashlib.sha256(img_url.encode("utf-8")).hexdigest()
+        # 命中已下载文件（含历史导出）则直接复用，扩展名可能不同
+        for existing in os.listdir(media_dir):
+            if existing.startswith(file_stem):
+                return existing
+
+        response = requests.get(img_url, timeout=10)
+        response.raise_for_status()
+        if not response.content:
+            return None
+
+        ext = _image_ext_from_url(img_url, response.headers.get("Content-Type"))
+        file_path = os.path.join(media_dir, file_stem + ext)
+        with open(file_path, "wb") as f:
+            f.write(response.content)
+        return file_stem + ext
+    except Exception as e:
+        print(f"下载图片失败 {img_url}: {e}")
+        return None
+
+
+def _localize_images(soup, media_dir: str, media_prefix: str) -> int:
+    """把正文中的微信图片下载到本地，src 改写为相对路径引用。
+
+    下载失败的图片保留原始远程 URL，不影响导出继续。
+
+    Returns:
+        成功本地化的图片数量。
+    """
+    localized = 0
+    for img in soup.find_all('img'):
+        img_url = img.get('data-src') or img.get('src')
+        if not img_url or not img_url.startswith(('http://', 'https://')):
+            continue
+
+        file_name = _download_image(img_url, media_dir)
+        if file_name:
+            img['src'] = f"{media_prefix}/{file_name}"
+            if 'title' in img.attrs and 'alt' not in img.attrs:
+                img['alt'] = img['title']
+            # 清理懒加载残留属性，避免与本地化后的 src 不一致
+            for attr in ('data-src', 'data-type', 'data-ratio', 'data-w'):
+                if img.has_attr(attr):
+                    del img[attr]
+            localized += 1
+    return localized
 
 
 def _preprocess_html(html_content: str, config: Dict[str, Any]) -> str:
@@ -120,6 +229,13 @@ def _preprocess_html(html_content: str, config: Dict[str, Any]) -> str:
         if config.get('remove_images', False):
             for img in soup.find_all('img'):
                 img.decompose()
+        elif config.get('localize_images', False) and config.get('media_dir'):
+            # 下载图片到本地 media 目录，引用改写为相对路径
+            _localize_images(
+                soup,
+                media_dir=config['media_dir'],
+                media_prefix=config.get('media_prefix', './media'),
+            )
         else:
             # 保留图片的 title 属性作为 alt
             for img in soup.find_all('img'):

@@ -34,6 +34,7 @@ class ExportArticlesRequest(BaseModel):
     add_title: bool = Field(True, description="是否添加标题")
     remove_images: bool = Field(True, description="是否移除图片")
     remove_links: bool = Field(False, description="是否移除链接")
+    localize_images: bool = Field(False, description="Markdown导出时是否下载图片到本地media目录（相对路径引用）")
     export_md: bool = Field(False, description="是否导出Markdown格式")
     export_docx: bool = Field(False, description="是否导出Word文档格式")
     export_json: bool = Field(False, description="是否导出JSON格式")
@@ -159,6 +160,7 @@ async def export_articles(
                     add_title=request.add_title,
                     remove_images=request.remove_images,
                     remove_links=request.remove_links,
+                    localize_images=request.localize_images,
                     export_md=request.export_md,
                     export_docx=request.export_docx,
                     export_json=request.export_json,

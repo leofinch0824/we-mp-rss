@@ -9,6 +9,7 @@ export const exportArticles = (params:any) => {
       add_title: params.add_title || true,
       remove_images: params.remove_images || false,
       remove_links: params.remove_links || false,
+      localize_images: params.localize_images || false,
       export_md: params.format.includes('md'),
       export_docx: params.format.includes('docx'),
       export_json: params.format.includes('json'),
