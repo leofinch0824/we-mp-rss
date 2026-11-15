@@ -28,3 +28,5 @@ test.yaml
 .travis
 test.py
 .codeartsdoer
+# 本地导出产物（文章 md + 本地化图片）
+downloads/
