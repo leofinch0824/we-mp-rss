@@ -28,5 +28,11 @@ test.yaml
 .travis
 test.py
 .codeartsdoer
+.env
+/.env.*
+!/.env.example
+.env.local
+.env.*.local
+.DS_Store
 # 本地导出产物（文章 md + 本地化图片）
 downloads/

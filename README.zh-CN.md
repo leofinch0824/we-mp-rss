@@ -13,6 +13,8 @@ docker run -d  --name we-mp-rss  -p 8001:8001 -v ./data:/app/data  ghcr.io/rache
 ```
 http://<您的ip>:8001/  即可开启
 
+**要使用本 fork 的 Markdown 图片本地化功能？** 请按[从 fork 源码构建并运行](docs/fork-docker-build.md)操作，不要拉取上游成品镜像。
+
 # 快速升级 
 
 ```

@@ -6,7 +6,7 @@
 
 落盘布局（每篇文章独立目录，单篇自包含、可整体拷走）：
 
-    downloads/articles/
+    <out_root>/                             # 默认 ~/Downloads/wx-articles
     ├── 20261112-1Ng31oZZbMYSW0OOSZIsAA/   # <发布日期>-<文章sn>
     │   ├── article.md                      # 正文，图片引用 ./media/...
     │   ├── meta.json                       # 标题/URL/公众号/时间/统计
@@ -19,10 +19,10 @@ sn（/s/ 后那段）由微信生成、全局唯一且不变，因此：
 - 同一文章重复导出 = 原地刷新（幂等），不产生副本
 - 标题不参与文件名（标题可重复、含非法字符），检索走 index.json
 
-仅依赖标准库。用法示例：
+仅依赖标准库。用法示例（脚本可随 skill 目录整体迁移，不依赖当前工作目录）：
 
-    python3 scripts/export_article.py --url https://mp.weixin.qq.com/s/xxxx
-    python3 scripts/export_article.py --url A --url B --out /path/to/dir
+    python3 <skill-dir>/scripts/export_article.py --url https://mp.weixin.qq.com/s/xxxx
+    python3 <skill-dir>/scripts/export_article.py --url A --url B --out /path/to/dir
 
 凭据默认 admin/admin@123，可用 --user/--password 或环境变量 WEMPRSS_USER/WEMPRSS_PASS 覆盖。
 """
@@ -44,7 +44,8 @@ from pathlib import Path
 
 FEATURED_MP_ID = "MP_WXS_FEATURED_ARTICLES"
 DEFAULT_BASE = "http://127.0.0.1:8001/api/v1/wx"
-REPO_ROOT = Path(__file__).resolve().parent.parent
+# 脚本要能随 skill 目录复制到任意位置，所以输出目录不按脚本位置推导
+DEFAULT_OUT = Path.home() / "Downloads" / "wx-articles"
 POLL_INTERVAL = 2
 
 
@@ -383,7 +384,7 @@ def export_one(api: Api, url: str, out_root: Path, timeout: int) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description="导出微信公众号文章为 Markdown（图片本地化）")
     parser.add_argument("--url", action="append", required=True, help="文章链接，可重复传多个")
-    parser.add_argument("--out", default=str(REPO_ROOT / "downloads" / "articles"), help="输出根目录")
+    parser.add_argument("--out", default=str(DEFAULT_OUT), help="输出根目录（默认 ~/Downloads/wx-articles）")
     parser.add_argument("--base", default=DEFAULT_BASE, help="API 基地址")
     parser.add_argument("--user", default=os.environ.get("WEMPRSS_USER", "admin"))
     parser.add_argument("--password", default=os.environ.get("WEMPRSS_PASS", "admin@123"))
@@ -401,7 +402,7 @@ def main() -> int:
         log(f"已登录 {args.base}，输出目录: {out_root}")
         if not api.check_auth():
             raise PipelineError(
-                "微信公众号授权已过期（无可用会话），自动刷新未启用。"
+                "微信公众号授权已过期（无可用会话）。"
                 "请打开 http://127.0.0.1:5173 扫码重新授权后再导出。"
             )
         for url in args.url:

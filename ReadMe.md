@@ -13,6 +13,8 @@ docker run -d  --name we-mp-rss  -p 8001:8001 -v ./data:/app/data  ghcr.io/rache
 ```
 Visit http://<your-ip>:8001/ to get started
 
+**Using this fork's Markdown image export?** [Build and run the fork from source](docs/fork-docker-build.md) instead of pulling the upstream image.
+
 # Quick Upgrade 
 
 ```

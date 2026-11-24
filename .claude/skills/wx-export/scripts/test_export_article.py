@@ -1,4 +1,4 @@
-"""scripts/export_article.py 的离线回归测试（仅标准库，不需要服务/网络）。
+"""同目录 export_article.py 的离线回归测试（仅标准库，不需要服务/网络）。
 
 覆盖 code review 确认过的缺陷点：
 - 长链 sn 提取（/s?__biz=...&sn=...）
@@ -6,7 +6,7 @@
 - 坏 zip 转为 PipelineError（不裸抛 BadZipFile）
 - index.json 损坏时备份+从 meta.json 重建（不静默丢历史）、原子写、同 id 去重
 
-运行：cd scripts && python3 -m unittest test_export_article.py
+运行：在本文件所在目录执行 python3 -m unittest test_export_article
 """
 import json
 import sys

@@ -15,4 +15,12 @@ build
 ref
 web_ui/node_modules
 qtserver/node_modules
+**/.env
+.env.*
+!.env.example
+**/.env.local
+**/.env.*.local
+config.yaml
+downloads
+static/wx_qrcode.png
 
